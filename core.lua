@@ -1,6 +1,7 @@
 require("packet")
 require("send_packet")
 require("common")
+require("card")
 
 game_room_table = {}    -- 房间表
 game_seat_table = {}    -- 座位表
@@ -52,6 +53,7 @@ function dump_user_data(userid)
     for k, v in pairs(user) do
         debug(k .. "=" ..v)
     end
+    debug("")
 end
 
 function dump_room_data_by_id(roomid)
@@ -74,6 +76,14 @@ function dump_room_data(room)
     print("round_total_money: " .. room.round_total_money)
     print("game_money: " .. room.game_money)
     
+    local str = "{"
+    print("public_cards: ")
+    for i = 1, #room.public_cards do
+        str = str .."{".. room.public_cards[i][1] .. "," ..room.public_cards[i][2] .. "}, "
+    end
+    str = str .."}"
+    print("public_cards: " .. str)
+
     local str = "{"
     print("playing_count: " .. room.playing_count)
     for i = 1, #room.playing_users do
@@ -125,6 +135,16 @@ function dump_chip_list(room)
     
 end
 
+function printtable(t)
+for i,v in pairs(t) do
+   if type(v) == "table" then
+    printtable(v);
+   else
+    print(i.." = "..tostring(v));
+   end  
+end
+end
+
 function init_room(in_roomid, in_basechip, in_requirechip)
     local room = 
     {
@@ -146,6 +166,7 @@ function init_room(in_roomid, in_basechip, in_requirechip)
         round_op_users_list = {},
         public_cards = {},
         status = GAME_STATUS.GAME_STATUS_STOP,
+        --game_result = {}
     }
     
     game_room_table[in_roomid] = room
@@ -157,7 +178,7 @@ function init_room(in_roomid, in_basechip, in_requirechip)
         {
             card1 = nil,
             card2 = nil,
-            handtype = nil, 
+            card_type = {0}, 
             money = 0,
             round_chip = 0,
             
@@ -183,7 +204,7 @@ function on_user_join(in_socket, in_userid, in_roomid)
         init_room(in_roomid, 100, 1000)
     end
 
-    init_user(in_userid, in_socket, 1000, in_roomid)
+    init_user(in_userid, in_socket, 3000, in_roomid)
     table.insert(game_room_table[in_roomid].onlooking_users, in_userid)
 end
 
@@ -197,14 +218,22 @@ function on_user_leave(uid)
     game_room_table[user.roomid] = nil
 end
 
-function on_user_sit(in_socket, seatid)
+function on_user_sit(in_socket, seatid, buy_money)
     local room, user = get_user_data_by_socket(in_socket)
     
-    --前面合法性验证
+    if buy_money >= user.money then
+        debug("user have not enough money")
+        return -1
+    end
+
+    if user.money < room.requirechip then 
+        debug("user have not enough money")
+        return -1
+    end
+        
     if room.status == GAME_STATUS.GAME_STATUS_STOP then 
         room.playing_users[seatid] = user.userid
         room.playing_count = room.playing_count + 1
-
     else
         table.insert(room.waiting_users, {user.userid, seatid})
     end
@@ -212,7 +241,7 @@ function on_user_sit(in_socket, seatid)
     user.seatid = seatid
     game_room_table[room.roomid] = room
     game_user_table[user.userid] = user
-    game_seat_table[room.roomid][seatid].money = user.money
+    game_seat_table[room.roomid][seatid].money = buy_money
     
     debug("user sit, userid = " .. user.userid .. ", seatid = " .. seatid)
     if room.status == GAME_STATUS.GAME_STATUS_STOP and room.playing_count >= 3 then --游戏还没开始，够两个人可以开始了
@@ -279,10 +308,12 @@ function on_user_fold(in_socket)
     room.playing_users[user.seatid] = 0
     local wait_user = {user.userid, user.seatid}
     table.insert(room.waiting_users, wait_user)
-    broadcast_user_fold(room, user)
+    room.playing_count = room.playing_count - 1
+
+--    debug("user fold, seatid = " .. user.seatid)
+--    dump_chip_list(room)
     
-    debug("user fold, seatid = " .. user.seatid)
-    dump_chip_list(room)
+    broadcast_user_fold(room, user)
     local next_seat = get_next_chip_seat(room)
     if next_seat == nil then -- next chip user
         start_next_round(room)
@@ -316,12 +347,26 @@ function start_game(roomid)
         room.playing_users[seatid] = userid
     end
 
+    local poker_cards = init_card()
+    local card1, card2, card3, card4, card5, rest_cards
+    card1, rest_cards = deal_card(poker_cards)
+    card2, rest_cards = deal_card(rest_cards)
+    card3, rest_cards = deal_card(rest_cards)
+    card4, rest_cards = deal_card(rest_cards)
+    card5, rest_cards = deal_card(rest_cards)
+    room.public_cards = {card1, card2, card3, card4, card5}
+    
     room.waiting_users = {}
     room.playing_count = 0 
     -- deal card
     for i = 1, MAX_PLAYER_COUNT do 
         local userid = room.playing_users[i]
         if userid ~= 0 then
+            card1, rest_cards = deal_card(rest_cards)
+            card2, rest_cards = deal_card(rest_cards)
+            game_seat_table[roomid][i].card1 = card1
+            game_seat_table[roomid][i].card2 = card2
+            debug(card1[1],card1[2], card2[1], card2[2])
             --deal_card(tid, user.seatid, card1, card2)
             room.playing_count = room.playing_count + 1
         end
@@ -330,7 +375,7 @@ function start_game(roomid)
     local smallblind_seat = get_next_seat(room, room.dealer_seatid)
     game_seat_table[roomid][smallblind_seat].round_chip = room.basechip
     local tmp_money = game_seat_table[roomid][smallblind_seat].money 
-    game_seat_table[roomid][smallblind_seat].money = tmp_money - room.basechip*2
+    game_seat_table[roomid][smallblind_seat].money = tmp_money - room.basechip
     
     local bigblind_seat = get_next_seat(room, smallblind_seat)
     game_seat_table[roomid][bigblind_seat].round_chip = room.basechip*2
@@ -355,7 +400,7 @@ function start_game(roomid)
 
     local cur_chip_seat = get_next_chip_seat(room)  
     room.cur_op_seat = cur_chip_seat
-
+    
     game_room_table[roomid] = room
 
     print(string.format("start game, smallblind = %d, bigblind = %d, dealer seat = %d", room.basechip, room.basechip*2, room.dealer_seatid))
@@ -364,6 +409,21 @@ function start_game(roomid)
 end
 
 function start_next_round(room)
+    if room.playing_count == 1 then -- only one player left, he wins
+        debug("one player left, game over")
+        for i=1, MAX_PLAYER_COUNT do
+            local userid = room.playing_users[i]
+            if userid ~= 0 then
+                local user = game_user_table[userid]
+                user.money = user.money + room.game_money
+                game_user_table[userid] = user
+                debug("user money = " .. user.money)
+                return 0
+            end
+        end
+    end    
+
+    room.game_money = room.game_money + room.round_total_money
     room.status = room.status + 1
     room.round_total_money = 0
     room.round_highest_money = 0
@@ -394,7 +454,8 @@ function start_next_round(room)
     else
         --debug("unkown status, some error")
         debug("game over")
-        return -1
+        stop_game(room)
+        return 0
     end
      
     debug("start_next_round, status = " .. room.status)
@@ -402,11 +463,113 @@ function start_next_round(room)
     return 0
 end
 
-function deal_card(roomid, seatid, card1, card2)
-    game_seat_table[roomid][seatid].card1 = card1
-    game_seat_table[roomid][seatid].card2 = card2
+function stop_game(room)
+    local seat_card_type = {}
+    for i=1, MAX_PLAYER_COUNT do
+        local userid = room.playing_users[i]
+        if userid ~= 0 then
+            seat = game_seat_table[room.roomid][i]
+            seat.card_type = get_card_type({seat.card1, seat.card2}, room.public_cards)
+            --game_seat_table[room.roomid][i] = seat
 
+            table.insert(seat_card_type, {i, game_seat_table[room.roomid][i].card_type}) 
+        end
+    end
+
+    local sortFunc = function(a, b) 
+        if a[2][1] == b[2][1] then  --牌型相同，就比点数
+            for i=2, 6 do
+                if a[2][i][2] ~= b[2][i][2] then
+                    if a[2][i][2] > b[2][i][2] then 
+                        return true
+                    end
+                    --elseif b[2][i][2] > a[2][i][2] then 
+                    return false
+                    
+                end
+            end
+        end
+        return a[2][1] > b[2][1]
+    end
+
+    table.sort(seat_card_type, sortFunc)
+    game_room_table[room.roomid] = room
+    debug("game over, winner seatid = " .. seat_card_type[1][1])
+
+    -- calc winner seat
+    local win_seats = {}
+    for i=1, #seat_card_type-1 do
+        local first_seatid = seat_card_type[i][1]
+        local first_card_type = seat_card_type[i][2][1]
+        local sec_seatid = seat_card_type[i+1][1]
+        local sec_card_type = seat_card_type[i][2][1]
+        
+        if first_seatid == sec_seatid then
+            if first_card_type == CARD_TYPE.FLUSH then --flush 
+                if table.find(win_seats, first_seatid) == -1 then 
+                    table.insert(win_seats, first_seatid)
+                end
+                if table.find(win_seats, sec_seatid) == -1 then 
+                    table.insert(win_seats, sec_seatid)
+                end
+            else
+                for j=2, 6 do
+                    if seat_card_type[i+1][2][j][2] > seat_card_type[i][2][j][2] then 
+                        if table.find(win_seats, first_seatid) == -1 then
+                            table.insert(win_seats, first_seatid)
+                        end
+                        break;
+                    elseif seat_card_type[i+1][2][j][2] < seat_card_type[i][2][j][2] then 
+                        if table.find(win_seats, sec_seatid) == -1 then
+                            table.insert(win_seats, sec_seatid)
+                        end
+                        break;   
+                    end
+                end
+                if table.find(win_seats, first_seatid) == -1 then 
+                    table.insert(win_seats, first_seatid)
+                end
+                if table.find(win_seats, sec_seatid) == -1 then 
+                    table.insert(win_seats, sec_seatid)
+                end
+            end
+        else 
+            if table.find(win_seats, first_seatid) == -1 then
+                table.insert(win_seats, first_seatid)
+            end
+            break
+        end
+    end
+    
+    -- get money 
+    admire_money = room.game_money / #win_seats
+    for i=1, #win_seats do
+        local userid = room.playing_users[win_seats[i]]
+        local user = game_user_table[userid]
+        user.money = user.money + admire_money
+    end
+    
+    -- log
+    for i=1, #seat_card_type-1 do
+        local seatid = seat_card_type[i][1]
+        local card_type = seat_card_type[i][2][1]
+        local str = "seat:".. seatid ..", card type = " .. card_type .. ", best cards:{"
+        for j=2, 6 do
+            str = str .. "{" .. seat_card_type[i][2][j][1] .. "," .. seat_card_type[i][2][j][2] .. "}" 
+        end
+        str = str .. "}"
+        print("seat_card_type: " .. str)
+        
+    end
+
+    broadcast_game_over(room)
 end
+
+--function deal_card(roomid, seatid, card1, card2)
+    --game_seat_table[roomid][seatid].card1 = card1
+    --game_seat_table[roomid][seatid].card2 = card2
+
+--end
 
 function next_dealer(roomid)
     local room = game_room_table[roomid]   
@@ -456,13 +619,15 @@ function user_bet(roomid, seatid, chip)
         return -1
     end
     local room = game_room_table[roomid]
+    local userid = room.playing_users[seatid]
 
     game_seat_table[roomid][seatid].round_chip = game_seat_table[roomid][seatid].round_chip + chip
     local tmp_money = game_seat_table[roomid][seatid].money
     game_seat_table[roomid][seatid].money = tmp_money - chip
-    
-    tmp_money = room.round_total_money 
-    room.round_total_money = tmp_money + chip
+
+    game_user_table[userid].money = game_user_table[userid].money - chip
+
+    room.round_total_money = room.round_total_money+ chip
     
     -- check if user raise
     if room.round_highest_money < game_seat_table[roomid][seatid].round_chip  then 
@@ -508,9 +673,9 @@ function test()
     on_user_join(3, 3, 1)
 
     --user sit down
-    assert(on_user_sit(1, 1) == 0) 
-    assert(on_user_sit(2, 6) == 0)
-    assert(on_user_sit(3, 8) == 0)
+    assert(on_user_sit(1, 1, 1000) == 0) 
+    assert(on_user_sit(2, 6, 1000) == 0)
+    assert(on_user_sit(3, 8, 1000) == 0)
 
     assert(on_user_call(1) == 0)
     --assert(on_user_call(2) == 0)
@@ -518,20 +683,26 @@ function test()
 
     assert(on_user_bet(2, 400) == 0)
     assert(on_user_call(3) == 0)
-    --assert(on_user_call(1) == 0)
-    assert(on_user_fold(1) == 0)
+    assert(on_user_call(1) == 0)
+    --assert(on_user_fold(1) == 0)
     --dump_room_data_by_id(1)
 
     assert(on_user_bet(2, 100) == 0)
     assert(on_user_call(3) == 0)
+    assert(on_user_call(1) == 0)
 
     assert(on_user_bet(2, 100) == 0)
     assert(on_user_call(3) == 0)
+    assert(on_user_call(1) == 0)
 
     assert(on_user_bet(2, 100) == 0)
-    assert(on_user_fold(3) == 0)
-
-
+    assert(on_user_call(3) == 0)
+    assert(on_user_call(1) == 0)
+    
+    --dump_room_data_by_id(1)
+    dump_user_data(1)
+    dump_user_data(2)
+    dump_user_data(3)
 end
 
 test()
