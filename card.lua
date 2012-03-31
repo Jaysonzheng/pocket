@@ -39,19 +39,27 @@ function init_card()
             table.insert(poker, {i, j})
         end
     end
+    math.randomseed(os.time()) math.random()  
     return poker
 end
 
 function deal_card(cardlist)
-    math.randomseed(os.time()) math.random()  
     cardnum = math.random(1,#cardlist)
-    result = cardlist[cardnum]  
-    table.remove(cardlist,cardnum) 
-    --print(string.format("%x, %x", result[1], result[2]))
-    return result, cardlist
+    card = cardlist[cardnum]  
+    table.remove(cardlist, cardnum) 
+    --print(string.format("%d, %d, %d", cardnum, card[1], card[2]))
+    return card, cardlist
 end
 
-function get_card_type(cardlist)
+function get_card_type(hand_cards, public_cards)
+    local cardlist = {}
+    for i=1, 5 do
+        table.insert(cardlist, public_cards[i])
+    end
+    table.insert(cardlist, hand_cards[1])
+    table.insert(cardlist, hand_cards[2])
+    cardlist = sort_card(cardlist)
+  
     local check_funcs = {check_straight_flush, check_four_kind, check_three, check_flush, check_straight, check_pairs}
     local func_count =  #check_funcs
     for i=1, func_count do
@@ -61,19 +69,15 @@ function get_card_type(cardlist)
         end
     end
 
-    local result = check_straight_flush(cardlist)
-    if result ~= 0 then
-        return result 
-    end
-    
     return 0
 end
 
-function compare_card(cardlist1, cardlist2)
-    local type1 = get_card_type(cardlist1)
-    local type2 = get_card_type(cardlist2)
+function compare_card(cards1, cards2, public_cards)
+    
+    local type1 = get_card_type(cards1, public_cards)
+    local type2 = get_card_type(cards2, public_cards)
     if type1[1] == type2[1] then        --相同牌型
-        if type1 == CARD_TYPE.FLUSH then
+        if type1 == CARD_TYPE.FLUSH then --同花不看点数
             return 0
         end
 
@@ -104,6 +108,11 @@ function sort_card(cardlist)
         return b[2] < a[2]
     end 
     table.sort(cardlist, sortFunc)
+
+--    for i=1, #cardlist do
+--        print(cardlist[i][1], cardlist[i][2])
+--    end
+    
     return cardlist
 end
 
@@ -317,7 +326,7 @@ function test()
     result = check_flush({{3,10},{3,9},{3,8},{3,7},{3,6},{3,5},{2,4}})
     --result = check_straight_flush({{3,10},{3,9},{4,8},{3,8},{3,7},{4,6},{3,6},{3,5}})
 
-    result = get_card_type({{3,11},{3,9},{4,8},{3,8},{3,7},{4,6},{3,6},{3,5}})
+    --result = get_card_type({{3,11},{3,9},{4,8},{3,8},{3,7},{4,6},{3,6},{3,5}})
     --assert(result == {{3,9},{4,8},{3,7},{4,6},{3,5}})
     if result  == 0 then
         print("result = false")
@@ -328,35 +337,30 @@ function test()
         print(result[i][1], result[i][2])
     end
 
-    get_card_type({{3,11},{3,9},{4,8},{3,8},{3,7},{4,6},{3,6},{3,5}})
+    --get_card_type({{3,11},{3,9},{4,8},{3,8},{3,7},{4,6},{3,6},{3,5}})
 
 end
 
 function unit_test()
-    assert(get_card_type({{3,13}, {3,12},{3,11},{3,10},{3,9},{4,6},{3,8}})[1] == CARD_TYPE.ROYAL_FLUSH)
-    assert(get_card_type({{4,13}, {4,12},{3,12},{2,12},{1,12},{4,6},{3,8}})[1] == CARD_TYPE.FOUR_OF_A_KIND)
-    assert(get_card_type({{3,11},{3,9},{4,8},{3,8},{3,7},{4,6},{3,6},{3,5}})[1] == CARD_TYPE.STRAIGHT_FLUSH)
-    assert(get_card_type({{3,5}, {2,5}, {1,5}, {4,3}, {3,3}, {2,2}, {1,2}})[1] == CARD_TYPE.FULL_HOUSE)
-    assert(get_card_type({{3,5}, {2,5}, {1,5}, {4,4}, {3,3}, {2,2}, {1,1}})[1] == CARD_TYPE.THREE_OF_A_KIND)
-    assert(check_flush({{4,11}, {3,11}, {4,10}, {4,9}, {4,8}, {3,7}, {4,5}})[1] == CARD_TYPE.FLUSH)
-    assert(get_card_type({{4,11}, {3,11}, {4,10}, {4,9}, {4,8}, {3,7}, {3,5}})[1] == CARD_TYPE.STRAIGHT)
-    assert(get_card_type({{4,11}, {3,11}, {3,8}, {2,8}, {4,5}, {1,4}, {2,3}})[1] == CARD_TYPE.TWO_PAIRS)
-    assert(get_card_type({{4,12}, {3,11}, {3,8}, {2,8}, {4,5}, {1,4}, {2,3}})[1] == CARD_TYPE.ONE_PAIR)
-    assert(get_card_type({{4,13}, {3,11}, {3,9}, {2,8}, {4,5}, {1,4}, {2,3}})[1] == CARD_TYPE.HIGH_CARD)
-   
-    local cardlist1 = {{3,13}, {3,12},{3,11},{3,10},{3,9},{4,6},{3,8}}
-    local cardlist2 = {{4,13}, {4,12},{3,12},{2,12},{1,12},{4,6},{3,8}}
-    assert(compare_card(cardlist1, cardlist2) == 1)
+    assert(get_card_type({{3,13}, {3,12}},{{3,11},{3,10},{3,9},{4,6},{3,8}})[1] == CARD_TYPE.ROYAL_FLUSH)
+    assert(get_card_type({{4,13}, {4,12}},{{3,12},{2,12},{1,12},{4,6},{3,8}})[1] == CARD_TYPE.FOUR_OF_A_KIND)
+    assert(get_card_type({{3,11},{3,9}},{{4,8},{3,8},{3,7},{3,6},{3,5}})[1] == CARD_TYPE.STRAIGHT_FLUSH)
+    assert(get_card_type({{3,5}, {2,5}}, {{1,5}, {4,3}, {3,3}, {2,2}, {1,2}})[1] == CARD_TYPE.FULL_HOUSE)
+    assert(get_card_type({{3,5}, {2,5}}, {{1,5}, {4,4}, {3,3}, {2,2}, {1,1}})[1] == CARD_TYPE.THREE_OF_A_KIND)
+    assert(get_card_type({{4,11}, {3,11}}, {{4,10}, {4,9}, {4,8}, {3,7}, {4,5}})[1] == CARD_TYPE.FLUSH)
+    assert(get_card_type({{4,11}, {3,11}}, {{4,10}, {4,9}, {4,8}, {3,7}, {3,5}})[1] == CARD_TYPE.STRAIGHT)
+    assert(get_card_type({{4,11}, {3,11}}, {{3,8}, {2,8}, {4,5}, {1,4}, {2,3}})[1] == CARD_TYPE.TWO_PAIRS)
+    assert(get_card_type({{4,12}, {3,11}}, {{3,8}, {2,8}, {4,5}, {1,4}, {2,3}})[1] == CARD_TYPE.ONE_PAIR)
+    assert(get_card_type({{4,13}, {3,11}}, {{3,9}, {2,8}, {4,5}, {1,4}, {2,3}})[1] == CARD_TYPE.HIGH_CARD)
+  
+    local cards1 = {{3,3}, {2,5}}
+    local cards2 = {{4,2}, {4,8}}
+    local public_cards = {{3,2}, {4,4}, {3,5}, {2,7}, {1,3}}
+    assert(compare_card(cards1, cards2, public_cards) == 1)
 
-    cardlist1 = {{4,13}, {3,13},{2,13},{1,13},{3,9},{4,6},{3,8}}
-    cardlist2 = {{4,13}, {4,12},{3,12},{2,12},{1,12},{4,6},{3,8}}
-    assert(compare_card(cardlist1, cardlist2) == 1)
-
-    cardlist1 = {{4,10}, {3,9},{2,8},{1,7},{3,6},{2,6},{3,2}}
-    cardlist2 = {{3,9},{2,8},{1,7},{3,6},{2,6},{3,5}, {3,2}}
-    assert(compare_card(cardlist1, cardlist2) == 1)
-
-
+    cards1 = {{3,6}, {4,9}}
+    cards2 = {{3,8}, {2,6}}
+    assert(compare_card(cards1, cards2, public_cards) == -1)
     print("all tests pass")
 
 end
