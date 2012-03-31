@@ -22,7 +22,6 @@ function broadcast_user_bet(game_room, seatid, chip)
 end
 
 function broadcast_user_fold(game_room, user)
-    debug("玩家弃牌, seatid = " .. user.seatid)
     packet.write_begin(PROTOCAL.SERVER_COMMAND_BC_USER_FOLD)
     packet.write_short(user.seatid)
     packet.write_end()
@@ -38,14 +37,10 @@ end
 
 
 function broadcast_next_chip(game_room, next_seat)
-    local seat = game_seat_table[game_room.roomid][next_seat]
-
-    local need_chip = game_room.round_highest_money - seat.round_chip
-    debug("下一位下注玩家："..next_seat .. ", 需要至少下注 " .. need_chip .. ", 可下注钱数 ".. seat.money)
+    debug("下一位下注玩家："..next_seat)
     packet.write_begin(PROTOCAL.SERVER_COMMAND_BC_NEXT_CHIP)
     packet.write_short(next_seat)
     packet.write_int(game_room.round_highest_money)
-    packet.write_int(need_chip)
     packet.write_end()
     broadcast_room_packet(game_room)
 end
@@ -72,12 +67,6 @@ function broadcast_river(game_room)
     debug("start round river")
     packet.write_begin(PROTOCAL.SERVER_COMMAND_BC_RIVER)
     packet.write_short(game_room.public_cards[5])
-    packet.write_end()
-    broadcast_room_packet(game_room)
-end
-
-function broadcast_game_over(game_room)
-    packet.write_begin(PROTOCAL.SERVER_COMMAND_BC_STOP_GAME)
     packet.write_end()
     broadcast_room_packet(game_room)
 end
