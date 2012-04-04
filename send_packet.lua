@@ -30,6 +30,7 @@ function broadcast_user_fold(game_room, user)
 end
 
 function broadcast_user_check(game_room, user)
+    debug("玩家看牌，seatid = " .. user.seatid)
     packet.write_begin(PROTOCAL.SERVER_COMMAND_BC_USER_CHECK)
     packet.write_short(user.seatid)
     packet.write_end()
@@ -108,6 +109,8 @@ function broadcast_room_packet(game_room)
 end
 
 function send_deal_card(roomid, seatid, card1, card2)
-    debug("deal card, seat:" .. seatid .. ",card1:{" ..card1[1] ..","..card1[2].."}, card2:{" .. card2[1] ..", "..card2[2].."}")
+    --debug("deal card, seat:" .. seatid .. ",card1:{" ..card1[1] ..","..card1[2].."}, card2:{" .. card2[1] ..", "..card2[2].."}")
+    debug("座位:"..seatid.." 牌为 " .. card1[1], card1[2], card2[1], card2[2])
+
 end
 

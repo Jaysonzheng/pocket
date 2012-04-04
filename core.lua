@@ -131,7 +131,7 @@ function dump_chip_list(room)
         end
     end
     str = str .. "}"
-    print("round_op_users_list: " .. str)
+    print("待下注玩家列表: " .. str)
     
 end
 
@@ -186,7 +186,6 @@ function init_room(in_roomid, in_basechip, in_requirechip)
             is_allin = false,
         }  
     end
-
 end
 
 function init_user(in_userid, in_socket, in_money, in_roomid)
@@ -250,7 +249,7 @@ function on_user_sit(in_socket, seatid, buy_money)
     user.seatid = seatid
     game_seat_table[room.roomid][seatid].money = buy_money
     
-    debug("user sit, userid = " .. user.userid .. ", seatid = " .. seatid)
+    debug("玩家买入坐下，userid = " .. user.userid .. ", seatid = " .. seatid .. ", 买入钱数: " .. buy_money)
     if room.status == GAME_STATUS.GAME_STATUS_STOP and room.playing_count >= 3 then --游戏还没开始，够两个人可以开始了
         start_game(room.roomid)
     end   
@@ -291,7 +290,7 @@ function on_user_check(in_socket)
     end
     
     room.cur_op_seat = get_next_seat(room, user.seatid)
-    game_room_table[room.roomid] = room
+--    game_room_table[room.roomid] = room
     
     broadcast_user_check(room, user)
 
@@ -313,9 +312,15 @@ function on_user_fold(in_socket)
  
     --加到等待队列中，从在玩的列表中删除
     room.playing_users[user.seatid] = 0
+    room.playing_count = room.playing_count - 1
     local wait_user = {user.userid, user.seatid}
     table.insert(room.waiting_users, wait_user)
-    room.playing_count = room.playing_count - 1
+
+    local seat = game_seat_table[room.roomid][user.seatid]
+    
+    --debug("fold round chip "..seat.round_chip)
+    --room.round_total_money = room.round_total_money + seat.round_chip
+    --seat.round_chip = 0
 
 --    debug("user fold, seatid = " .. user.seatid)
 --    dump_chip_list(room)
@@ -329,8 +334,69 @@ function on_user_fold(in_socket)
         room.cur_op_seat = next_seat
         broadcast_next_chip(room, next_seat)
     end
-    game_room_table[room.roomid] = room
+--    game_room_table[room.roomid] = room
 
+    return 0
+end
+
+function user_bet(roomid, seatid, chip)
+    if check_user_op_valid(roomid, seatid) == false then
+        return -1
+    end
+    
+    local seat = game_seat_table[roomid][seatid]
+    -- 玩家all in
+    if seat.money - chip <= 0 then 
+        debug("user all in, user's money = " .. seat.money .. ", chip = "..chip)
+        seat.money = 0
+        seat.is_allin = true
+    end
+
+    local room = game_room_table[roomid]
+    local userid = room.playing_users[seatid]
+    local user = game_user_table[userid]
+
+    seat.round_chip = seat.round_chip + chip
+    seat.money = seat.money - chip
+    user.money = user.money - chip
+    room.round_total_money = room.round_total_money + chip
+   
+    -- check if user raise
+    -- 玩家加注，更新当前回合的最高下注钱数
+    if room.round_highest_money < seat.round_chip  then 
+        room.round_highest_money = seat.round_chip
+        
+        debug("玩家加注, seatid = " .. seatid .. ", 下注 = " .. room.round_highest_money .. ", 当前轮桌子总下注数 = " .. room.round_total_money)
+        -- 重新排队下注玩家顺序列表
+        room.round_op_users_list = {}
+        for i = 1, MAX_PLAYER_COUNT-1 do 
+            local next_seat = seatid + i
+            if next_seat > MAX_PLAYER_COUNT then 
+                next_seat = next_seat - MAX_PLAYER_COUNT
+            end
+            
+            --该座位不空且有钱,加到下一轮下注列表中
+            if room.playing_users[next_seat] ~= 0 and game_seat_table[roomid][next_seat].money > 0 then               
+                table.insert(room.round_op_users_list, next_seat)
+            end 
+        end
+    else 
+        --debug("user call, seatid = " .. seatid ..", room round chips = ".. room.round_total_money)
+        debug("玩家跟注: seatid = " .. seatid .. ", 钱数：" .. seat.round_chip .. ", 当前轮桌子总下注数：" .. room.round_total_money)
+    end
+
+    broadcast_user_bet(room, seatid, room.round_highest_money)
+       
+    dump_chip_list(room)
+    local next_seat = get_next_chip_seat(room)
+    if next_seat == nil then -- next chip user
+        start_next_round(room)
+    else
+        --debug("next chip seat: " .. next_seat)
+        game_room_table[room.roomid].cur_op_seat = next_seat
+        broadcast_next_chip(room, next_seat)
+    end
+  
     return 0
 end
 
@@ -362,6 +428,7 @@ function start_game(roomid)
     card4, rest_cards = deal_card(rest_cards)
     card5, rest_cards = deal_card(rest_cards)
     room.public_cards = {card1, card2, card3, card4, card5}
+    debug("开始发牌")
     
     room.waiting_users = {}
     room.playing_count = 0 
@@ -373,32 +440,38 @@ function start_game(roomid)
             card2, rest_cards = deal_card(rest_cards)
             game_seat_table[roomid][i].card1 = card1
             game_seat_table[roomid][i].card2 = card2
-            --debug(card1[1],card1[2], card2[1], card2[2])
+            
             send_deal_card(roomid, i, card1, card2)
             room.playing_count = room.playing_count + 1
         end
     end
     
-    local smallblind_seat = get_next_seat(room, room.dealer_seatid)
-    game_seat_table[roomid][smallblind_seat].round_chip = room.basechip
-    local tmp_money = game_seat_table[roomid][smallblind_seat].money 
-    game_seat_table[roomid][smallblind_seat].money = tmp_money - room.basechip
-    local smallblind_userid = game_user_table[room.playing_users[smallblind_seat]].userid
+    -- 小盲注
+    local smallblind_seatid = get_next_seat(room, room.dealer_seatid)
+    local smallblind_seat = game_seat_table[roomid][smallblind_seatid]
+    smallblind_seat.round_chip = room.basechip
+    smallblind_seat.money = smallblind_seat.money - room.basechip
+    local smallblind_userid = game_user_table[room.playing_users[smallblind_seatid]].userid
     game_user_table[smallblind_userid].money = game_user_table[smallblind_userid].money - room.basechip
 
-    local bigblind_seat = get_next_seat(room, smallblind_seat)
-    game_seat_table[roomid][bigblind_seat].round_chip = room.basechip*2
-    tmp_money = game_seat_table[roomid][bigblind_seat].money 
-    game_seat_table[roomid][bigblind_seat].money = tmp_money - room.basechip*2
-    local bigblind_userid = game_user_table[room.playing_users[bigblind_seat]].userid
+    -- 大盲注
+    local bigblind_seatid = get_next_seat(room, smallblind_seatid)
+    bigblind_seat = game_seat_table[roomid][bigblind_seatid]
+    bigblind_seat.round_chip = room.basechip*2
+    tmp_money = game_seat_table[roomid][bigblind_seatid].money 
+    bigblind_seat.money = tmp_money - room.basechip*2
+    local bigblind_userid = game_user_table[room.playing_users[bigblind_seatid]].userid
     game_user_table[bigblind_userid].money = game_user_table[bigblind_userid].money - room.basechip*2
-    
+
     -- first chip user
     room.round_highest_money = room.basechip*2
     room.round_total_money = room.basechip*3
     room.status = GAME_STATUS.GAME_STATUS_PRE_FLOP
     
+    debug("大盲小盲下完注:小盲玩家：".. smallblind_seatid .. ", 大盲玩家：" ..bigblind_seatid .. ", 当前桌子总下注数："..room.round_total_money)
+
     -- bet seat list
+    -- 下注玩家顺序列表，从大盲的下家开始
     for i=0, MAX_PLAYER_COUNT-1 do
         local next_seat = room.cur_op_seat + i
         if next_seat > MAX_PLAYER_COUNT then 
@@ -458,8 +531,12 @@ function start_next_round(room)
         local seat = game_seat_table[room.roomid][i]
         if seat.round_chip ~= 0 then
             game_round_chip = game_round_chip + seat.round_chip
-            
-            table.insert(bet_chip_list, {i, seat.is_allin, seat.round_chip})
+            debug("座位：" ..i .. " 下注:" .. seat.round_chip  .. " game round chip = " ..game_round_chip )
+            if room.playing_users[i] ~= 0 then   -- 玩家已弃牌或不在座位
+                table.insert(bet_chip_list, {i, seat.is_allin, seat.round_chip})
+            else 
+                room.main_pot = room.main_pot + seat.round_chip
+            end
             if seat.is_allin == true then 
                 is_have_allin_user = true
             end
@@ -487,7 +564,7 @@ function start_next_round(room)
         --all in user
         --对于all in 的玩家，计算奖池
         local chip_user_count = #bet_chip_list
-        for i=1, chip_user_count-1 do
+        for i=1, chip_user_count do
             local firstseatid = bet_chip_list[i][1]
             local firstseat = game_seat_table[room.roomid][firstseatid]
             local bet_chip = bet_chip_list[i][3]
@@ -511,9 +588,9 @@ function start_next_round(room)
             pot = room.main_pot + pot
             room.main_pot = 0 
             firstseat.side_pot = pot
---            for k=1, #firstseat.pot_users do
---                debug(firstseatid .. " pot user:" .. "" .. firstseat.pot_users[k])
---            end
+            for k=1, #firstseat.pot_users do
+                debug(firstseatid .. " pot user:" .. "" .. firstseat.pot_users[k] ..", pot:" .. pot)
+            end
         end
     end
 
@@ -576,10 +653,11 @@ function stop_game(room)
     end
 
     table.sort(seat_card_type, sortFunc)
-    game_room_table[room.roomid] = room
+--    game_room_table[room.roomid] = room
     debug("game over, winner seatid = " .. seat_card_type[1][1])
 
     -- calc winner seat
+    -- 给所有玩家排名
     local win_seats= {}
     for i=1, MAX_PLAYER_COUNT do 
         win_seats[i] = {}
@@ -618,6 +696,9 @@ function stop_game(room)
             if table.find(win_seats[pos], first_seatid) == -1 then
                 table.insert(win_seats[pos], first_seatid)
             end
+            if table.find(win_seats[pos+1], sec_seatid) == -1 then 
+                table.insert(win_seats[pos+1], sec_seatid)
+            end
             pos = pos + 1
         end
     end
@@ -634,7 +715,7 @@ function stop_game(room)
             user.money = user.money + admire_money
         end
     else 
-        for i=1, MAX_PLAYER_COUNT do
+        for i=1, MAX_PLAYER_COUNT do    -- 遍历每个座位的边池
             local seat = game_seat_table[room.roomid][i]
             if #seat.pot_users ~= 0 then 
                 --calc who win the pot 
@@ -644,31 +725,29 @@ function stop_game(room)
                     local tmp_seats = win_seats[j]
                     for l=1, #tmp_seats do
 
-                        --debug("pot user", win_seats[j][l], tmp_seats[1])
+--                        debug("pot user", win_seats[j][l], tmp_seats[1])
                         if table.find(pot_users, win_seats[j][l]) ~= -1 then
                             --debug("----pot user", win_seats[j][l], #tmp_seats)
                             table.insert(pot_win_users, win_seats[j][l])
                         end    
                     end
-                    if #pot_win_users == true then
-                        break
-                    end
 --                    for k=1, #pot_users do 
 --                        debug(pot_users[j])
 --                    end
-
+                    
+                    --找到这个池里,有人
                     if #pot_win_users ~= 0 then 
                         break
                     end
                 end
-                debug(i, seat.side_pot, #pot_win_users, #win_seats)
+--                debug(i, seat.side_pot, #pot_win_users, #win_seats)
 
                 -- pot
                 local pot_win_count = #pot_win_users
                 for j=1, pot_win_count do 
                     local admire_money = seat.side_pot / pot_win_count
                     local userid = room.playing_users[pot_win_users[j]]
-                    --debug(j, userid, pot_win_users[j])
+--                    debug(j, userid, pot_win_users[j])
                     local user = game_user_table[userid]
                     user.money = user.money + admire_money
                 end
@@ -727,65 +806,6 @@ function get_user_data_by_socket(in_socket)
     local room = game_room_table[roomid]
     local user = game_user_table[uid]
     return room, user
-end
-
-function user_bet(roomid, seatid, chip)
-    if check_user_op_valid(roomid, seatid) == false then
-        return -1
-    end
-    
-    local seat = game_seat_table[roomid][seatid]
-    if seat.money - chip <= 0 then 
-        debug("user all in, user's money = " .. seat.money .. ", chip = "..chip)
-        seat.money = 0
-        seat.is_allin = true
-    end
-
-    local room = game_room_table[roomid]
-    local userid = room.playing_users[seatid]
-    local user = game_user_table[userid]
-
-    seat.round_chip = seat.round_chip + chip
-    seat.money = seat.money - chip
-
-    user.money = user.money - chip
-    room.round_total_money = room.round_total_money + chip
-   
-    -- check if user raise
-    if room.round_highest_money < seat.round_chip  then 
-        room.round_highest_money = seat.round_chip
-        
-        debug("user raise, seatid = " .. seatid .. ", chips = " .. room.round_highest_money .. ", room round chips = " .. room.round_total_money)
-        -- 重新排队下注玩家顺序列表
-        room.round_op_users_list = {}
-        for i = 1, MAX_PLAYER_COUNT-1 do 
-            local next_seat = seatid + i
-            if next_seat > MAX_PLAYER_COUNT then 
-                next_seat = next_seat - MAX_PLAYER_COUNT
-            end
-            
-            --该座位不空且有钱
-            if room.playing_users[next_seat] ~= 0 and game_seat_table[roomid][next_seat].money > 0 then               
-                table.insert(room.round_op_users_list, next_seat)
-            end 
-        end
-    else 
-        debug("user call, seatid = " .. seatid ..", room round chips = ".. room.round_total_money)
-    end
-
-    broadcast_user_bet(room, seatid, room.round_highest_money)
-       
-    dump_chip_list(room)
-    local next_seat = get_next_chip_seat(room)
-    if next_seat == nil then -- next chip user
-        start_next_round(room)
-    else
-        --debug("next chip seat: " .. next_seat)
-        game_room_table[room.roomid].cur_op_seat = next_seat
-        broadcast_next_chip(room, next_seat)
-    end
-  
-    return 0
 end
 
 function test_join_and_sit()
@@ -855,7 +875,6 @@ function test_allin()
     dump_user_data(1)
     dump_user_data(2)
     dump_user_data(3)
-
 end
 
 test_join_and_sit()
@@ -896,4 +915,4 @@ test_allin()
 --        end
 --        print(pot)
 --    end
-
+  
